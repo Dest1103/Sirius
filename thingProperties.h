@@ -5,8 +5,8 @@
 
 const char DEVICE_LOGIN_NAME[]  = "7e3a6a0a-50f5-47e5-a29f-ee54d3b5a658";
 
-const char SSID[]               = "VIVOFIBRA-4D40";    // Network SSID (name)
-const char PASS[]               = "C96978B726";    // Network password (use for WPA, or use as key for WEP)
+const char SSID[]               = "************";    // Network SSID (name)
+const char PASS[]               = "**********";    // Network password (use for WPA, or use as key for WEP)
 const char DEVICE_KEY[]  = "RhXPs5mA#aaZHYs#KQ#nPtcbK";    // Secret device password
 
 void onLumensChange();
