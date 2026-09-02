@@ -1,6 +1,6 @@
 {
   "cpu": {
-    "fqbn": "esp32:esp32:esp32doit-devkit-v1",
+    "fqbn": "***************",
     "name": "",
     "type": "serial"
   },
