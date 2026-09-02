@@ -1,6 +1,6 @@
 #include "arduino_secrets.h"
 #include <Wire.h>
-#include <WiFiClient.h>
+#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 
 #include "thingProperties.h"
@@ -13,7 +13,7 @@ TaskHandle_t SendData;
 
 
 //Caminho do Servidor MEXER DURANTE A AULA PARA DEMONSTRAÇÃO
-const char* serverPath = "http://192.168.15.30:5479/api/device/publish/sensor";
+const char* serverPath = "https://mini-project-1.grauea.com.br/api/device/publish/sensor";
 
 
 void setup() {
@@ -50,8 +50,8 @@ void setup() {
 
 //Strings de identificação da equipe e projeto
 
-const String deviceId = "Equipe Planta"; // Identificação única do seu chip
-const String category = "BH1750 Luminosidade";            // Tipo do sensor
+const String deviceId = "Sirius"; // Identificação única do seu chip
+const String category = "BH1750_Luminosidade";            // Tipo do sensor
 const int groupId = 4;
 
 //Placeholders de chaveamento
@@ -92,17 +92,19 @@ void LerSensor(void *pvParameters){
 void EnviarDados(void *pvParameters){
   for(;;){
   if (WiFi.status() == WL_CONNECTED) {
-    WiFiClient client;
+    WiFiClientSecure client;
     HTTPClient http;
+
+    client.setInsecure(); 
     
     http.begin(client, serverPath);
-    http.addHeader("Authorization", "Bearer uea-dispositivo-2026");
+    http.addHeader("Authorization", "Bearer uea-dispositivo-avywhl49");
     http.addHeader("Content-Type", "application/json");
     
     
     String jsonPayload = "{\"device_id\":\"" + deviceId + "\","
-                        "\"category\":\"" + category + "\","
                         "\"group_id\":" + String(groupId) + ","
+                        "\"category\":\"" + category + "\","
                         "\"value\":" + String(Lumens) + "}";
     Serial.print("Payload enviado: ");
     Serial.println(jsonPayload);
