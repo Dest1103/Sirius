@@ -13,7 +13,7 @@ TaskHandle_t SendData;
 
 
 //Caminho do Servidor MEXER DURANTE A AULA PARA DEMONSTRAÇÃO
-const char* serverPath = "https://mini-project-1.grauea.com.br/api/device/publish/sensor";
+const char* serverPath = "*******************************";
 
 
 void setup() {
@@ -98,8 +98,8 @@ void EnviarDados(void *pvParameters){
     client.setInsecure(); 
     
     http.begin(client, serverPath);
-    http.addHeader("Authorization", "Bearer uea-dispositivo-avywhl49");
-    http.addHeader("Content-Type", "application/json");
+    http.addHeader("Authorization", "****************");
+    http.addHeader("Content-Type", "***************");
     
     
     String jsonPayload = "{\"device_id\":\"" + deviceId + "\","
