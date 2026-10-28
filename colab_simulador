@@ -1,0 +1,134 @@
+!pip install paho-mqtt
+import time
+import json
+import random
+import threading
+import paho.mqtt.client as mqtt
+import ipywidgets as widgets
+from IPython.display import display
+
+# ==========================================
+# 1. CONFIGURAÇÕES MQTT & LOCALIZAÇÃO
+# ==========================================
+AWS_BROKER = "XX.XXX.XXX.XXX"
+PORTA = XXXX
+TOPICO_ENVIO = "sirius/estufa/sensores"
+CLIENT_ID = "Colab_Simulador_Sirius"
+
+CIDADE_ESTUFA = "Manaus"
+BAIRRO_ESTUFA = "Japiim"
+FUSO_HORARIO = "America/Manaus"
+
+# Variáveis globais de controle
+cenario_selecionado = '1. Operação Normal'
+transmissao_ativa = True
+
+# ==========================================
+# 2. CONEXÃO MQTT
+# ==========================================
+def on_connect(client, userdata, flags, rc, properties=None):
+    if rc == 0:
+        print("🟢 Colab conectado com sucesso ao Broker MQTT!")
+    else:
+        print(f"🔴 Falha na conexão MQTT. Código: {rc}")
+
+client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, client_id=CLIENT_ID)
+client.on_connect = on_connect
+client.connect(AWS_BROKER, PORTA, 60)
+client.loop_start()
+
+# ==========================================
+# 3. CRIAÇÃO DO MENU DE CENÁRIOS
+# ==========================================
+dropdown_cenario = widgets.Dropdown(
+    options=[
+        '1. Operação Normal',
+        '2. Incêndio / Calor Extremo',
+        '3. Falha de Sensores (Anomalia)',
+        '4. Tempestade / Chuva Forte'
+    ],
+    value='1. Operação Normal',
+    description='Cenário:',
+    disabled=False,
+    style={'description_width': 'initial'}
+)
+
+def atualizar_cenario(change):
+    global cenario_selecionado
+    cenario_selecionado = change['new']
+    print(f"\n⚡ [MENU] Cenário alterado IMEDIATAMENTE para: {cenario_selecionado}")
+
+dropdown_cenario.observe(atualizar_cenario, names='value')
+
+print("==================================================")
+print("  🌿 ESTUFA INTELIGENTE SIRIUS - SIMULADOR COLAB  ")
+print("==================================================")
+print("Selecione o cenário abaixo (as alterações aplicam instantaneamente):\n")
+display(dropdown_cenario)
+
+# ==========================================
+# 4. GERADOR DE DADOS
+# ==========================================
+def gerar_pacote():
+    dados = {
+        "cidade": CIDADE_ESTUFA,
+        "bairro": BAIRRO_ESTUFA,
+        "fuso_horario": FUSO_HORARIO,
+        "temperatura": 25.0,
+        "umidade_solo": 50,
+        "luminosidade": 60,
+        "uv": 3,
+        "dli": 4.5,
+        "chovendo": False
+    }
+
+    if cenario_selecionado == '1. Operação Normal':
+        dados["temperatura"] = round(random.uniform(22.0, 28.0), 1)
+        dados["umidade_solo"] = random.randint(30, 60)
+        dados["luminosidade"] = random.randint(40, 80)
+        dados["uv"] = random.randint(2, 5)
+        dados["dli"] = round(random.uniform(3.0, 8.0), 1)
+        dados["chovendo"] = False
+
+    elif cenario_selecionado == '2. Incêndio / Calor Extremo':
+        dados["temperatura"] = round(random.uniform(58.0, 65.0), 1)
+        dados["umidade_solo"] = random.randint(10, 20)
+        dados["luminosidade"] = 95
+        dados["uv"] = 9
+        dados["dli"] = 12.0
+        dados["chovendo"] = False
+
+    elif cenario_selecionado == '3. Falha de Sensores (Anomalia)':
+        dados["temperatura"] = round(random.uniform(20.0, 25.0), 1)
+        dados["umidade_solo"] = 120  # Fora de escala
+        dados["luminosidade"] = 5
+        dados["uv"] = 12             # Anomalia UV
+        dados["dli"] = 1.0
+        dados["chovendo"] = False
+
+    elif cenario_selecionado == '4. Tempestade / Chuva Forte':
+        dados["temperatura"] = round(random.uniform(18.0, 21.0), 1)
+        dados["umidade_solo"] = random.randint(85, 95)
+        dados["luminosidade"] = random.randint(10, 20)
+        dados["uv"] = 1
+        dados["dli"] = 2.0
+        dados["chovendo"] = True
+
+    return dados
+
+# ==========================================
+# 5. LOOP DE TRANSMISSÃO EM SEGUNDO PLANO
+# ==========================================
+def loop_transmissao():
+    if transmissao_ativa:
+        pacote = gerar_pacote()
+        payload = json.dumps(pacote)
+
+        client.publish(TOPICO_ENVIO, payload)
+        print(f"📡 [{cenario_selecionado}] -> Temp: {pacote['temperatura']}°C | Solo: {pacote['umidade_solo']}% | Chuva: {pacote['chovendo']}")
+
+        # Agenda a próxima execução para daqui a 5 segundos sem travar a interface
+        threading.Timer(5.0, loop_transmissao).start()
+
+# Inicia o temporizador em segundo plano
+loop_transmissao()
