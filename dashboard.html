@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Estufa Inteligente</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js" type="text/javascript"></script>
+    
+    <style>
+        body { font-family: 'Inter', sans-serif; margin: 0; overflow-x: hidden; background-color: #000; }
+        #environment { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: -2; transition: background 1s ease; }
+        #temp-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: -1; pointer-events: none; transition: background-color 1s ease; mix-blend-mode: overlay; }
+        #celestial-body { position: absolute; width: 80px; height: 80px; border-radius: 50%; transition: all 0.5s ease-out; transform: translate(-50%, -50%); box-shadow: 0 0 40px rgba(255, 255, 255, 0.4); }
+        .cloud { position: absolute; background: white; border-radius: 50px; opacity: 0.8; filter: blur(5px); animation: drift linear infinite; }
+        .cloud::before, .cloud::after { content: ''; position: absolute; background: white; border-radius: 50%; }
+        @keyframes drift { from { transform: translateX(-200px); } to { transform: translateX(120vw); } }
+        #rain-container { position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: -1; display: none; }
+        .drop { position: absolute; bottom: 100%; width: 2px; height: 20px; background: rgba(255, 255, 255, 0.5); animation: fall linear infinite; }
+        @keyframes fall { to { transform: translateY(100vh); } }
+        #ground-layer {
+            position: absolute; bottom: 0; width: 100%; height: 30vh;
+            background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 320"><path fill="%231b5e20" fill-opacity="1" d="M0,128L48,138.7C96,149,192,171,288,186.7C384,203,480,213,576,197.3C672,181,768,139,864,133.3C960,128,1056,160,1152,176C1248,192,1344,192,1392,192L1440,192L1440,320L1392,320C1344,320,1248,320,1152,320C1056,320,960,320,864,320C768,320,672,320,576,320C480,320,384,320,288,320C192,320,96,320,48,320L0,320Z"></path></svg>');
+            background-size: cover; background-repeat: no-repeat; transition: filter 1s ease;
+        }
+        .glass { background: rgba(15, 35, 70, 0.65); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.15); box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4); }
+        .bg-dark-green { background-color: #166534; }
+    </style>
+</head>
+<body class="text-white">
+
+    <div id="alert-container" class="fixed top-24 right-4 z-50 flex flex-col gap-3 max-w-sm w-full pointer-events-none"></div>
+
+    <div id="environment">
+        <div id="celestial-body"></div>
+        <div id="clouds-container"></div>
+        <div id="ground-layer"></div>
+    </div>
+    <div id="rain-container"></div>
+    <div id="temp-overlay"></div>
+
+    <div class="relative min-h-screen p-6 md:p-10 flex flex-col">
+        
+        <!-- Header -->
+        <header class="flex justify-between items-center mb-8 glass rounded-2xl p-4 px-6 flex-wrap gap-4 relative z-40">
+            <div class="flex items-center gap-3">
+                <i class="fa-solid fa-leaf text-green-600 text-3xl"></i>
+                <h1 class="text-2xl font-bold tracking-wide text-white flex items-center">
+                    Estufa&nbsp;<span class="font-light">Inteligente</span>
+                </h1>
+            </div>
+            
+            <div class="flex items-center gap-6">
+                <div class="flex items-center gap-2 bg-white/10 px-4 py-2 rounded-full border border-white/20">
+                    <div id="status-dot" class="w-3 h-3 rounded-full bg-red-600 animate-pulse"></div>
+                    <span id="status-text" class="text-sm font-medium text-white">Conectando AWS...</span>
+                </div>
+                
+                <div class="text-right flex flex-col items-end">
+                    <div id="current-time" class="text-2xl font-semibold text-white">--:--</div>
+                    <div class="text-xs text-green-300 font-medium tracking-wide flex items-center gap-1 mt-1">
+                        <i class="fa-solid fa-location-dot"></i>
+                        <span id="location-text">Buscando Local...</span>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Grid -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 flex-grow auto-rows-min relative z-10">
+            
+            <!-- CLIMA EXTERNO -->
+            <div class="glass rounded-2xl p-6 flex flex-col justify-between transition-transform hover:scale-105 border-l-4 border-blue-400" id="card-weather">
+                <div class="flex justify-between items-start mb-4">
+                    <h2 class="text-lg font-medium text-gray-100">Clima Externo</h2>
+                    <img id="icon-weather-img" src="" alt="Clima" class="w-10 h-10 hidden drop-shadow-md">
+                    <i id="icon-weather-fallback" class="fa-solid fa-cloud-sun text-2xl text-blue-300"></i>
+                </div>
+                <div class="flex items-baseline gap-2">
+                    <span id="val-weather-temp" class="text-5xl font-bold text-white">--</span>
+                    <span class="text-xl text-white">°C</span>
+                </div>
+                <div class="mt-2 flex justify-between items-center text-sm">
+                    <span id="status-weather" class="text-gray-200 capitalize truncate pr-2">Aguardando local...</span>
+                    <span id="val-weather-humidity" class="text-blue-200 font-medium whitespace-nowrap hidden"><i class="fa-solid fa-droplet text-xs mr-1"></i>--%</span>
+                </div>
+            </div>
+
+            <!-- TEMPERATURA INTERNA -->
+            <div class="glass rounded-2xl p-6 flex flex-col justify-between transition-transform hover:scale-105">
+                <div class="flex justify-between items-start mb-4">
+                    <h2 class="text-lg font-medium text-gray-100">Temperatura Int.</h2>
+                    <i id="icon-temp" class="fa-solid fa-temperature-half text-2xl text-orange-400"></i>
+                </div>
+                <div class="flex items-baseline gap-2">
+                    <span id="val-temp" class="text-5xl font-bold text-white">--</span>
+                    <span class="text-xl text-white">°C</span>
+                </div>
+                <div id="status-temp" class="mt-2 text-sm text-gray-200">Aguardando servidor...</div>
+            </div>
+
+            <!-- UMIDADE DO SOLO -->
+            <div class="glass rounded-2xl p-6 flex flex-col justify-between transition-transform hover:scale-105">
+                <div class="flex justify-between items-start mb-4">
+                    <h2 class="text-lg font-medium text-gray-100">Umidade do Solo</h2>
+                    <i class="fa-solid fa-seedling text-2xl text-green-400"></i>
+                </div>
+                <div class="flex items-baseline gap-2">
+                    <span id="val-humidity" class="text-5xl font-bold text-white">--</span>
+                    <span class="text-xl text-white">%</span>
+                </div>
+                <div id="status-humidity" class="mt-2 text-sm text-gray-200">Aguardando servidor...</div>
+            </div>
+
+            <!-- LUMINOSIDADE + UV (ALTERADO) -->
+            <div class="glass rounded-2xl p-6 flex flex-col justify-between transition-transform hover:scale-105">
+                <div class="flex justify-between items-start mb-4">
+                    <h2 class="text-lg font-medium text-gray-100">Luminosidade</h2>
+                    <i id="icon-light" class="fa-solid fa-sun text-2xl text-yellow-300"></i>
+                </div>
+                <div class="flex justify-between items-end gap-2">
+                    <div class="flex items-baseline gap-2">
+                        <span id="val-light" class="text-5xl font-bold text-white">--</span>
+                        <span class="text-xl text-white">%</span>
+                    </div>
+                    <div class="text-right pb-1">
+                        <div class="text-[10px] uppercase tracking-wider text-purple-300 font-semibold mb-1">Índice UV</div>
+                        <span id="val-uv" class="text-2xl font-bold text-purple-400">--</span>
+                    </div>
+                </div>
+                <div class="mt-2 flex flex-col gap-1">
+                    <div id="status-light" class="text-sm text-gray-200">Aguardando luz...</div>
+                    <div id="status-uv" class="text-xs text-purple-300/80 font-medium">Aguardando UV...</div>
+                </div>
+            </div>
+
+            <!-- DLI ACUMULADO -->
+            <div class="glass rounded-2xl p-6 flex flex-col justify-between transition-transform hover:scale-105">
+                <div class="flex justify-between items-start mb-4">
+                    <h2 class="text-lg font-medium text-gray-100">DLI Acumulado</h2>
+                    <i class="fa-solid fa-chart-line text-2xl text-amber-400"></i>
+                </div>
+                <div class="flex items-baseline gap-2">
+                    <span id="val-dli" class="text-5xl font-bold text-white">--</span>
+                    <span class="text-xs text-gray-300 font-mono">/ <span id="val-dli-meta">--</span> mol</span>
+                </div>
+                <div id="status-dli" class="mt-2 text-sm text-gray-200">Aguardando cálculo...</div>
+            </div>
+
+            <!-- LUZ ARTIFICIAL -->
+            <div id="card-art-light" class="glass rounded-2xl p-6 flex flex-col justify-between transition-all duration-500 border-l-4 border-gray-500">
+                <div class="flex justify-between items-start mb-4">
+                    <h2 class="text-lg font-medium text-gray-100">Luz Artificial</h2>
+                    <i id="icon-art-light" class="fa-solid fa-lightbulb text-2xl text-white"></i>
+                </div>
+                <div>
+                    <span id="val-art-light" class="text-3xl font-bold uppercase tracking-wider text-white">--</span>
+                </div>
+                <div id="status-art-light" class="mt-2 text-sm font-medium text-gray-300">Aguardando IA...</div>
+            </div>
+
+            <!-- IRRIGAÇÃO -->
+            <div id="card-irrigation" class="glass rounded-2xl p-6 flex flex-col justify-between transition-all duration-500 border-l-4 border-gray-500">
+                <div class="flex justify-between items-start mb-4">
+                    <h2 class="text-lg font-medium text-gray-100">Irrigação (Água)</h2>
+                    <i id="icon-irrigation" class="fa-solid fa-droplet text-2xl text-white"></i>
+                </div>
+                <div>
+                    <span id="val-irrigation" class="text-3xl font-bold uppercase tracking-wider text-white">--</span>
+                </div>
+                <div id="status-irrigation" class="mt-2 text-sm font-medium text-gray-300">Aguardando IA...</div>
+            </div>
+
+            <!-- DOMO -->
+            <div id="card-dome" class="glass rounded-2xl p-6 flex flex-col justify-between transition-all duration-500 border-l-4 border-gray-500">
+                <div class="flex justify-between items-start mb-4">
+                    <h2 class="text-lg font-medium text-gray-100">Domo / Teto</h2>
+                    <i id="icon-dome" class="fa-solid fa-warehouse text-2xl text-white"></i>
+                </div>
+                <div>
+                    <span id="val-dome" class="text-3xl font-bold uppercase tracking-wider text-white">--</span>
+                </div>
+                <div id="status-dome" class="mt-2 text-sm font-medium text-gray-300">Aguardando IA...</div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        // ==========================================
+        // CONFIGURAÇÕES DA API DE CLIMA
+        // ==========================================
+        const OPENWEATHER_API_KEY = "XXXXXXXXXXXXX"; 
+        let lastWeatherFetchTime = 0;
+        let lastLocationQuery = "";
+
+        // ==========================================
+        // ESTADO GLOBAL
+        // ==========================================
+        let state = {
+            temp: 0, statusTemp: "Conectando...", humidity: 0, statusHumidity: "Conectando...",
+            light: 0, statusLight: "Conectando...", uv: 0, statusUv: "Conectando...", // Variáveis UV mantidas
+            dli: 0, dliMeta: 0, statusDli: "Conectando...", hour: 12, minute: 0,
+            isDay: true, irrigationActive: false, statusIrrigation: "Conectando...",
+            isRaining: false, domeOpen: false, statusDome: "Conectando...",
+            artLightOn: false, statusArtLight: "Conectando..."
+        };
+
+        let activeAlerts = new Set();
+
+        const els = {
+            valTemp: document.getElementById('val-temp'), statusTemp: document.getElementById('status-temp'), iconTemp: document.getElementById('icon-temp'),
+            valHumidity: document.getElementById('val-humidity'), statusHumidity: document.getElementById('status-humidity'),
+            valIrrigation: document.getElementById('val-irrigation'), statusIrrigation: document.getElementById('status-irrigation'), iconIrrigation: document.getElementById('icon-irrigation'), cardIrrigation: document.getElementById('card-irrigation'),
+            valLight: document.getElementById('val-light'), statusLight: document.getElementById('status-light'), iconLight: document.getElementById('icon-light'),
+            valUv: document.getElementById('val-uv'), statusUv: document.getElementById('status-uv'), // Adicionado DOM UV
+            valDli: document.getElementById('val-dli'), valDliMeta: document.getElementById('val-dli-meta'), statusDli: document.getElementById('status-dli'),
+            valDome: document.getElementById('val-dome'), statusDome: document.getElementById('status-dome'), iconDome: document.getElementById('icon-dome'), cardDome: document.getElementById('card-dome'),
+            valArtLight: document.getElementById('val-art-light'), statusArtLight: document.getElementById('status-art-light'), iconArtLight: document.getElementById('icon-art-light'), cardArtLight: document.getElementById('card-art-light'),
+            currentTime: document.getElementById('current-time'), locationText: document.getElementById('location-text'),
+            env: document.getElementById('environment'), tempOverlay: document.getElementById('temp-overlay'),
+            celestialBody: document.getElementById('celestial-body'), cloudsContainer: document.getElementById('clouds-container'),
+            rainContainer: document.getElementById('rain-container'), groundLayer: document.getElementById('ground-layer'),
+            statusDot: document.getElementById('status-dot'), statusText: document.getElementById('status-text'),
+            alertContainer: document.getElementById('alert-container'),
+            
+            valWeatherTemp: document.getElementById('val-weather-temp'),
+            statusWeather: document.getElementById('status-weather'),
+            valWeatherHumidity: document.getElementById('val-weather-humidity'),
+            iconWeatherImg: document.getElementById('icon-weather-img'),
+            iconWeatherFallback: document.getElementById('icon-weather-fallback')
+        };
+
+        async function fetchExternalWeather(lat, lon, cityName) {
+            if (!OPENWEATHER_API_KEY || OPENWEATHER_API_KEY === "COLE_SUA_CHAVE_AQUI") {
+                els.statusWeather.innerText = "Chave API não configurada";
+                return;
+            }
+
+            const now = Date.now();
+            const queryKey = lat ? `${lat},${lon}` : cityName;
+            if (queryKey === lastLocationQuery && (now - lastWeatherFetchTime < 15 * 60 * 1000)) return;
+
+            let url = "";
+            if (lat && lon) {
+                url = `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&units=metric&lang=pt_br&appid=${OPENWEATHER_API_KEY}`;
+            } else if (cityName) {
+                url = `https://api.openweathermap.org/data/2.5/weather?q=${encodeURIComponent(cityName)}&units=metric&lang=pt_br&appid=${OPENWEATHER_API_KEY}`;
+            } else {
+                return;
+            }
+
+            try {
+                els.statusWeather.innerText = "Atualizando clima...";
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (data.cod === 200) {
+                    lastWeatherFetchTime = now;
+                    lastLocationQuery = queryKey;
+
+                    els.valWeatherTemp.innerText = Math.round(data.main.temp);
+                    els.statusWeather.innerText = data.weather[0].description;
+                    
+                    els.valWeatherHumidity.innerText = `${data.main.humidity}%`;
+                    els.valWeatherHumidity.classList.remove('hidden');
+
+                    const iconCode = data.weather[0].icon;
+                    els.iconWeatherImg.src = `https://openweathermap.org/img/wn/${iconCode}@2x.png`;
+                    els.iconWeatherImg.classList.remove('hidden');
+                    els.iconWeatherFallback.classList.add('hidden');
+                } else {
+                    els.statusWeather.innerText = "Erro ao buscar clima";
+                }
+            } catch (error) {
+                console.error("Erro na API de Clima:", error);
+                els.statusWeather.innerText = "Falha de conexão";
+            }
+        }
+
+        function handleAlerts(alertasString) {
+            if (!alertasString || alertasString === "Operação Normal") return;
+            const alertas = alertasString.split(" | ");
+            alertas.forEach(msg => {
+                if (activeAlerts.has(msg)) return;
+                activeAlerts.add(msg);
+                const alertCard = document.createElement('div');
+                alertCard.className = "bg-red-900/80 backdrop-blur-md border-l-4 border-red-500 text-white p-4 rounded-lg shadow-2xl flex justify-between items-start pointer-events-auto transition-all duration-300";
+                alertCard.innerHTML = `
+                    <div class="flex items-start gap-3">
+                        <i class="fa-solid fa-triangle-exclamation text-red-400 mt-1"></i>
+                        <div>
+                            <h4 class="font-bold text-sm text-red-200">Alerta do Sistema</h4>
+                            <p class="text-sm mt-1">${msg}</p>
+                        </div>
+                    </div>
+                    <button class="text-gray-400 hover:text-white transition-colors" onclick="removerAlerta(this, '${msg}')">
+                        <i class="fa-solid fa-xmark text-xl"></i>
+                    </button>
+                `;
+                els.alertContainer.appendChild(alertCard);
+            });
+        }
+
+        window.removerAlerta = function(buttonElement, msg) {
+            buttonElement.parentElement.remove();
+            activeAlerts.delete(msg);
+        };
+
+        function createClouds() {
+            els.cloudsContainer.innerHTML = '';
+            for(let i=0; i<4; i++) {
+                let cloud = document.createElement('div');
+                cloud.className = 'cloud';
+                cloud.style.top = Math.random() * 30 + '%';
+                cloud.style.width = (100 + Math.random() * 150) + 'px';
+                cloud.style.height = (40 + Math.random() * 30) + 'px';
+                cloud.style.animationDuration = (20 + Math.random() * 30) + 's';
+                cloud.style.animationDelay = '-' + (Math.random() * 20) + 's';
+                els.cloudsContainer.appendChild(cloud);
+            }
+        }
+
+        function createRain() {
+            els.rainContainer.innerHTML = '';
+            for(let i=0; i<100; i++) {
+                let drop = document.createElement('div');
+                drop.className = 'drop';
+                drop.style.left = Math.random() * 100 + 'vw';
+                drop.style.animationDuration = (0.5 + Math.random() * 0.5) + 's';
+                drop.style.animationDelay = Math.random() * 2 + 's';
+                els.rainContainer.appendChild(drop);
+            }
+        }
+
+        function updateVisuals() {
+            els.valTemp.innerText = state.temp; els.statusTemp.innerText = state.statusTemp;
+            els.valHumidity.innerText = state.humidity; els.statusHumidity.innerText = state.statusHumidity;
+            els.valLight.innerText = state.light; els.statusLight.innerText = state.statusLight;
+            els.valUv.innerText = state.uv; els.statusUv.innerText = state.statusUv; // Renderiza UV
+            els.valDli.innerText = state.dli; els.valDliMeta.innerText = state.dliMeta; els.statusDli.innerText = state.statusDli;
+
+            els.valDome.innerText = state.domeOpen ? "Aberto" : "Fechado";
+            els.statusDome.innerText = state.statusDome;
+            if(state.domeOpen) {
+                els.iconDome.className = "fa-solid fa-warehouse text-2xl text-green-500"; els.cardDome.style.borderLeftColor = "#22c55e"; 
+            } else {
+                els.iconDome.className = "fa-solid fa-person-shelter text-2xl text-red-500"; els.cardDome.style.borderLeftColor = "#ef4444"; 
+            }
+
+            els.valArtLight.innerText = state.artLightOn ? "Ligada" : "Desligada";
+            els.statusArtLight.innerText = state.statusArtLight;
+            if(state.artLightOn) {
+                els.iconArtLight.className = "fa-solid fa-lightbulb text-2xl text-yellow-300"; els.cardArtLight.style.borderLeftColor = "#fde047"; 
+            } else {
+                els.iconArtLight.className = "fa-regular fa-lightbulb text-2xl text-gray-400"; els.cardArtLight.style.borderLeftColor = "#6b7280"; 
+            }
+            
+            els.valIrrigation.innerText = state.irrigationActive ? "Ativa" : "Desligada";
+            els.statusIrrigation.innerText = state.statusIrrigation;
+            if (state.irrigationActive) {
+                els.iconIrrigation.className = "fa-solid fa-droplet text-2xl text-blue-400 animate-bounce"; els.cardIrrigation.style.borderLeftColor = "#60a5fa";
+            } else {
+                els.iconIrrigation.className = "fa-solid fa-droplet-slash text-2xl text-gray-400"; els.cardIrrigation.style.borderLeftColor = "#6b7280";
+            }
+            
+            state.isDay = (state.hour >= 6 && state.hour < 18);
+            let progress = state.isDay ? (state.hour - 6) / 12 : (state.hour >= 18 ? (state.hour - 18) / 12 : (state.hour + 6) / 12);
+            
+            if (state.isDay) {
+                els.celestialBody.style.background = "#FFD700"; els.celestialBody.style.boxShadow = "0 0 60px #FFD700";
+                els.env.style.background = state.light > 50 ? "linear-gradient(to bottom, #1e3a8a 0%, #3b82f6 100%)" : "linear-gradient(to bottom, #475569, #94a3b8)"; 
+                els.cloudsContainer.style.opacity = state.light > 50 ? "0.3" : "0.8"; els.groundLayer.style.filter = state.light > 50 ? "brightness(1)" : "brightness(0.7)";
+                els.iconLight.className = "fa-solid fa-sun text-2xl text-yellow-400";
+            } else {
+                els.celestialBody.style.background = "#ffffff"; els.celestialBody.style.boxShadow = "0 0 30px rgba(255,255,255,0.6)";
+                els.env.style.background = "linear-gradient(to bottom, #020617, #0f172a, #1e293b)"; 
+                els.cloudsContainer.style.opacity = state.light > 20 ? "0.2" : "0.5"; els.groundLayer.style.filter = "brightness(0.3)";
+                els.iconLight.className = "fa-solid fa-moon text-2xl text-blue-300";
+            }
+
+            let leftPos = progress * 100; let heightArc = Math.sin(progress * Math.PI);
+            els.celestialBody.style.left = leftPos + 'vw'; els.celestialBody.style.top = (85 - (heightArc * 75)) + 'vh';
+
+            els.rainContainer.style.display = state.isRaining ? 'block' : 'none';
+
+            if (state.temp < 18) {
+                els.tempOverlay.style.backgroundColor = "rgba(59, 130, 246, 0.2)"; els.iconTemp.className = "fa-solid fa-temperature-low text-2xl text-blue-400";
+            } else if (state.temp > 28) {
+                els.tempOverlay.style.backgroundColor = "rgba(239, 68, 68, 0.15)"; els.iconTemp.className = "fa-solid fa-temperature-high text-2xl text-red-500";
+            } else {
+                els.tempOverlay.style.backgroundColor = "transparent"; els.iconTemp.className = "fa-solid fa-temperature-half text-2xl text-green-500";
+            }
+        }
+
+        createClouds(); createRain(); updateVisuals();
+
+        const AWS_IP = "XX.XXX.XXX.XXX";
+        const WS_PORT = XXXX;
+        const TOPIC = "sirius/estufa/dados";
+        const clientId = "SiriusWeb_" + Math.random().toString(16).substr(2, 8);
+        const mqttClient = new Paho.MQTT.Client(AWS_IP, WS_PORT, clientId);
+
+        mqttClient.onConnectionLost = onConnectionLost;
+        mqttClient.onMessageArrived = onMessageArrived;
+
+        function conectarMQTT() {
+            els.statusDot.classList.replace('bg-dark-green', 'bg-red-600'); els.statusDot.classList.add('animate-pulse'); els.statusText.innerText = "Conectando AWS...";
+            mqttClient.connect({
+                useSSL: true, timeout: 5, keepAliveInterval: 30,
+                onSuccess: onConnect, onFailure: function(err) {
+                    els.statusText.innerText = "Falha. Retentando..."; setTimeout(conectarMQTT, 5000);
+                }
+            });
+        }
+
+        function onConnect() {
+            els.statusDot.classList.replace('bg-red-600', 'bg-dark-green'); els.statusDot.classList.remove('animate-pulse'); els.statusText.innerText = "AWS Conectada";
+            mqttClient.subscribe(TOPIC);
+        }
+
+        function onConnectionLost(responseObject) {
+            if (responseObject.errorCode !== 0) {
+                els.statusDot.classList.replace('bg-dark-green', 'bg-red-600'); els.statusDot.classList.add('animate-pulse'); els.statusText.innerText = "Desconectado AWS";
+                setTimeout(conectarMQTT, 3000);
+            }
+        }
+
+        function onMessageArrived(message) {
+            try {
+                const dados = JSON.parse(message.payloadString);
+                updateDashboardData(dados);
+            } catch (e) {
+                console.error("Erro JSON: ", e);
+            }
+        }
+
+        function updateDashboardData(dados) {
+            if (dados.temperatura !== undefined) state.temp = dados.temperatura;
+            if (dados.umidade_solo !== undefined) state.humidity = dados.umidade_solo; 
+            if (dados.luminosidade !== undefined) state.light = dados.luminosidade;
+            if (dados.uv !== undefined) state.uv = dados.uv; // Adicionado parsing UV
+            if (dados.dli !== undefined) state.dli = dados.dli;
+            if (dados.dli_meta !== undefined) state.dliMeta = dados.dli_meta;
+            if (dados.chovendo !== undefined) state.isRaining = dados.chovendo;
+            if (dados.domo_aberto !== undefined) state.domeOpen = dados.domo_aberto;
+            if (dados.luz_artificial !== undefined) state.artLightOn = dados.luz_artificial;
+            if (dados.irrigacao_ativa !== undefined) state.irrigationActive = dados.irrigacao_ativa;
+            if (dados.status_irrigacao !== undefined) state.statusIrrigation = dados.status_irrigacao;
+            
+            if (dados.status_temp !== undefined) state.statusTemp = dados.status_temp;
+            if (dados.status_umidade_solo !== undefined) state.statusHumidity = dados.status_umidade_solo;
+            if (dados.status_luminosidade !== undefined) state.statusLight = dados.status_luminosidade;
+            if (dados.status_uv !== undefined) state.statusUv = dados.status_uv; // Adicionado parsing status UV
+            if (dados.status_dli !== undefined) state.statusDli = dados.status_dli;
+            if (dados.status_domo !== undefined) state.statusDome = dados.status_domo;
+            if (dados.status_luz_artificial !== undefined) state.statusArtLight = dados.status_luz_artificial;
+
+            if (dados.hora !== undefined && dados.minuto !== undefined) {
+                state.hour = dados.hora;
+                state.minute = dados.minuto;
+                els.currentTime.innerText = `${String(state.hour).padStart(2, '0')}:${String(state.minute).padStart(2, '0')}`;
+            }
+
+            if (dados.localizacao !== undefined) {
+                els.locationText.innerText = dados.localizacao;
+                fetchExternalWeather(dados.lat, dados.lon, dados.localizacao);
+            }
+            
+            if (dados.alertas_sistema) handleAlerts(dados.alertas_sistema);
+            
+            updateVisuals();
+        }
+
+        conectarMQTT();
+    </script>
+</body>
+</html>
